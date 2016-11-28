@@ -18,6 +18,8 @@ import logging
 import numbers
 import socket
 import struct
+import random
+import threading
 import time
 
 import json
@@ -50,7 +52,12 @@ from ryu.ofproto import inet
 from ryu.ofproto import ofproto_v1_0
 from ryu.ofproto import ofproto_v1_2
 from ryu.ofproto import ofproto_v1_3
+
+from ryu.lib import hub
+from operator import attrgetter
+
 import networkx as nx
+#import matplotlib.pyplot as plt
 
 # =============================
 #          REST API
@@ -165,7 +172,9 @@ PRIORITY_IP_HANDLING = 5
 
 PRIORITY_TYPE_ROUTE = 'priority_route'
 #G = nx.dodecahedral_graph()
-G = nx.DiGraph()
+G = nx.Graph()
+ev_map = {}
+lock = threading.Lock()
 
 
 def get_priority(priority_type, vid=0, route=None):
@@ -262,11 +271,52 @@ class RestRouterAPI(app_manager.RyuApp):
                        action='delete_vlan_data',
                        conditions=dict(method=['DELETE']))
 
+
+        print ('starting congestion module')
+        self.monitor_thread = hub.spawn(self._monitor)
+
+    def _monitor(self):
+        while True:
+            hub.sleep(5)
+            # get all the datapaths
+            print ('Printing routers*******************************************************')
+            #print (len(RouterController.get_routers()))
+            #for router in RouterController.get_routers():
+            #    print(router)
+    
+            for datapath in RouterController.get_routers():
+                print(datapath)
+                if datapath is None:
+                    pass
+                print('sending Stat request to the above')
+                ofproto = datapath.ofproto
+                parser = datapath.ofproto_parser
+    
+                #req = parser.OFPFlowStatsRequest(datapath)
+                #datapath.send_msg(req)
+   
+                req = parser.OFPPortStatsRequest(datapath, 0, ofproto.OFPP_ANY)
+                datapath.send_msg(req)
+
+
+                
+            # send Stats request
+            #for router in 
+            #    print('send stats request: %016x', datapath.id)
+            #    ofproto = datapath.ofproto
+            #    parser = datapath.ofproto_parser
+    
+            #    #req = parser.OFPFlowStatsRequest(datapath)
+            #    #datapath.send_msg(req)
+    
+            #    req = parser.OFPPortStatsRequest(datapath, 0, ofproto.OFPP_ANY)
+            #    datapath.send_msg(req)
+
+
     @set_ev_cls(dpset.EventDP, dpset.DPSET_EV_DISPATCHER)
     def datapath_handler(self, ev):
         if ev.enter:
             RouterController.register_router(ev.dp)
-            #NetworkX Add Node
         else:
             RouterController.unregister_router(ev.dp)
 
@@ -299,11 +349,62 @@ class RestRouterAPI(app_manager.RyuApp):
         self._stats_reply_handler(ev)
 
     # for OpenFlow version1.2/1.3
-    @set_ev_cls(ofp_event.EventOFPStatsReply, MAIN_DISPATCHER)
+    #@set_ev_cls(ofp_event.EventOFPStatsReply, MAIN_DISPATCHER)
     def stats_reply_handler_v1_2(self, ev):
         self._stats_reply_handler(ev)
 
     # TODO: Update routing table when port status is changed.
+    
+    @set_ev_cls(ofp_event.EventOFPPortStatsReply, MAIN_DISPATCHER)
+    def _port_stats_reply_handler(self, ev):
+	global ev_map
+        global lock
+        if ev.msg.datapath not in ev_map:
+		ev_map[ev.msg.datapath] = ev
+		return
+	#else:
+		#print ev1.msg.body
+		#print "-------------------------------------------------------------------------------------"
+		#print ev.msg.body
+		#ev1 = ev
+        
+        ev1 = ev_map[ev.msg.datapath]
+	body = ev.msg.body
+	body1 = ev1.msg.body
+
+        lock.acquire()
+        print(list(ev_map))
+	print('datapath         port     '
+                         'total-bytes	Bandwidth	Weight')
+                         
+        print('---------------- '
+                         '--------	---------	---------	-----------')
+
+	
+	
+	body.sort(key=attrgetter('port_no'))
+        body1.sort(key=attrgetter('port_no'))
+	i = 0
+	while i < len(body) and i < len(body1):
+                stat = body[i]
+        	stat1 = body1[i]
+		bytes0 = stat.rx_bytes + stat.tx_bytes
+		bytes1 = stat1.rx_bytes + stat1.tx_bytes
+		TB = - bytes1 - bytes0
+		BW = float(TB*8/1)
+          	Wgt = float(BW/10000000)
+#            	self.logger.info('%016x %8x %8d     %8.5f           %8.9f',
+#                             	ev.msg.datapath.id, stat.port_no
+#                             	,TB, BW, Wgt)
+            	print ("%016x %8x %8d     %8.5f           %8.9f" % (
+                             	ev.msg.datapath.id, stat.port_no
+                             	,TB, BW, Wgt))
+
+                #print ('Port Number -> %s | Total bytes sent: %s | Bandwidth %s | Edge Weight [%s]', stat.port_no, TB, BW, Wgt)
+		i = i + 1
+	#overwriting the previous event 	
+        lock.release()
+	ev_map[ev.msg.datapath] = ev
 
 
 # REST command template
@@ -334,11 +435,13 @@ def rest_command(func):
 class RouterController(ControllerBase):
 
     _ROUTER_LIST = {}
+    _ROUTER_DP_LIST = []
     _LOGGER = None
 
     def __init__(self, req, link, data, **config):
         super(RouterController, self).__init__(req, link, data, **config)
         self.waiters = data['waiters']
+
 
     @classmethod
     def set_logger(cls, logger):
@@ -352,6 +455,7 @@ class RouterController(ControllerBase):
     @classmethod
     def register_router(cls, dp):
         dpid = {'sw_id': dpid_lib.dpid_to_str(dp.id)}
+        cls._ROUTER_DP_LIST.append(dp)
         try:
             router = Router(dp, cls._LOGGER)
             #G.add_node(dpid_lib.dpid_to_str(dp.id), 'addr' = {})
@@ -363,7 +467,11 @@ class RouterController(ControllerBase):
         cls._LOGGER.info('Join as router.', extra=dpid)
 
     @classmethod
-    def unregister_router(cls, dp):
+    def update_router_list(cls, ev):
+        Router_ROUTER_DP_LIST.append(ev.dp)
+
+    @classmethod
+    def unregister_routere(cls, dp):
         if dp.id in cls._ROUTER_LIST:
             cls._ROUTER_LIST[dp.id].delete()
             del cls._ROUTER_LIST[dp.id]
@@ -442,6 +550,11 @@ class RouterController(ControllerBase):
             return routers
         else:
             raise NotFoundError(switch_id=switch_id)
+
+    @classmethod
+    def get_routers(self):
+        return self._ROUTER_DP_LIST
+
 
 
 class Router(dict):
@@ -704,23 +817,21 @@ class VlanRouter(object):
             # Set address data
             if REST_ADDRESS in data:
                 address = data[REST_ADDRESS]
+                address_id = self._set_address_data(address)
+                details = 'Add address [address_id=%d]' % address_id
                 switch_id = str(self.sw_id['sw_id'])
                 if switch_id in G:
-                    print ('switch_id in G')
                     print ('switch ' + switch_id + ' setting address ' + str(address))
+                    print ('type to add is ' + str(type(G.node[switch_id])))
                     G.node[switch_id].append(address)
                     #print nx.get_node_attributes(G]
                 else:
                     #existing_addresses = G.get_node_attributes[switch_id]
                     #print('printing node information' + str(type(existing_addresses)))
                     #existing_addresses.append(address
-                    print ('switch_id not in G')
-                    print ('switch ' + switch_id + ' setting address ' + str(address))
                     G.add_node(switch_id)
                     G.node[switch_id] =  [address,]
                     #nx.info(G, switch_id)
-                address_id = self._set_address_data(address)
-                details = 'Add address [address_id=%d]' % address_id
 
             #Set routing data
             elif REST_GATEWAY in data:
@@ -962,6 +1073,7 @@ class VlanRouter(object):
 
     def packet_in_handler(self, msg, header_list):
         # Check invalid TTL (for OpenFlow V1.2/1.3)
+        #self.print_all_shortest_paths()
         ofproto = self.dp.ofproto
         if ofproto.OFP_VERSION == ofproto_v1_2.OFP_VERSION or \
                 ofproto.OFP_VERSION == ofproto_v1_3.OFP_VERSION:
@@ -1017,18 +1129,15 @@ class VlanRouter(object):
 	self.logger.info(rt_ports, extra=self.sw_id)
 	self.logger.info("Router self_sw_id = " + switch_id, extra=self.sw_id)
         
-        self.logger.info('Graph Nodes are: ' + str(G.nodes(data=True)), extra=self.sw_id)
-        self.logger.info('Graph edges are: ' + str(G.edges()), extra=self.sw_id)
+        #if switch_id not in G:
+        #    G.add_node(switch_id)
+        #    self.logger.info("Adding switch/Router to graph" + switch_id, extra=self.sw_id)
 
-        #Add an edge in Graph
-        switch_id = str(self.sw_id['sw_id'])
-        #search in Graph, which switch id has src_ip
-        src_ip_tmp = src_ip + '/24'
-        for n, d in G.nodes_iter(data=True):
-            if src_ip_tmp in d:
-                if src_ip_tmp not in rt_ports: # To make sure a self-edge is not added.
-                    G.add_edge(switch_id, str(n))
-                    G.add_edge(str(n), switch_id)
+        #G.node[switch_id] = rt_ports;
+        self.logger.info('Graph Nodes are: ' + str(G.nodes(data=True)), extra=self.sw_id)
+        self.logger.info('Graph edges are: ' + str(G.edges(data=True)), extra=self.sw_id)
+        #nx.draw(G)
+        #plt.draw()
 
         if src_ip == dst_ip:
             # GARP -> packet forward (normal)
@@ -1037,6 +1146,19 @@ class VlanRouter(object):
             self.logger.info('Receive GARP from [%s].', srcip,
                              extra=self.sw_id)
             self.logger.info('Send GARP (normal).', extra=self.sw_id)
+
+            #Edge found
+            # Find the switch id of the src_ip
+            # Add edge as this switch_id and dst_ip's switch id
+            #for n in G:
+            #    #if src_ip in n.items():
+            #    #G.add_edge(switch_id, sw_id, weight = 1)
+            #    if src_ip in G.node[n]:
+            #        print ("Adding edge to Graph ..." + n + " <-------> " + switch_id )
+            #        G.add_edge(switch_id, n , weight = 1)
+            #        break
+            print ('printing graph node list')
+            print (list(G))
 
         elif dst_ip not in rt_ports:
             dst_addr = self.address_data.get_data(ip=dst_ip)
@@ -1053,7 +1175,6 @@ class VlanRouter(object):
 	    	self.logger.info('dst_ip NOT in rt_ports ', extra=self.sw_id)
         else:
 	    self.logger.info('dst_ip in rt_ports ', extra=self.sw_id)
-                
             if header_list[ARP].opcode == arp.ARP_REQUEST:
                 # ARP request to router port -> send ARP reply
                 src_mac = header_list[ARP].src_mac
@@ -1071,6 +1192,23 @@ class VlanRouter(object):
                 self.logger.info('Send ARP reply to [%s]', srcip,
                                  extra=self.sw_id)
 
+                #Add an edge in Graph
+               
+                switch_id = str(self.sw_id['sw_id'])
+                #search in Graph, which switch id has src_ip
+                src_ip = src_ip + '/24'
+                for n, d in G.nodes_iter(data=True):
+                    if src_ip in d and not G.has_edge(switch_id, str(n)): 
+                        print ("adding edge from " + switch_id + " to " + str(n))
+                        #wt = random.randrange(1,10,1)
+                        in_prt = self.ofctl.get_packetin_inport(msg)
+                        wt = 1
+                        port_dict = {switch_id : in_prt, str(n): -1}
+                        G.add_edge(switch_id, str(n), w=wt, port_dict = port_dict)
+		    if src_ip in d and G.has_edge(switch_id, str(n)):
+                        G[switch_id][str(n)]['port_dict'][switch_id] = self.ofctl.get_packetin_inport(msg)
+                        
+                
 
             elif header_list[ARP].opcode == arp.ARP_REPLY:
                 #  ARP reply to router port -> suspend packets forward
@@ -1091,9 +1229,29 @@ class VlanRouter(object):
                                                    suspend_packet.data)
                         self.logger.info('Send suspend packet to [%s].',
                                          srcip, extra=self.sw_id)
+        
 
-        self.logger.info('(After)Graph Nodes are: ' + str(G.nodes(data=True)), extra=self.sw_id)
-        self.logger.info('(After)Graph edges are: ' + str(G.edges()), extra=self.sw_id)
+
+    def print_all_shortest_paths(self):
+	#path = nx.all_pairs_shortest_path(G, weight="weight")
+	#path_len = nx.all_pairs_shortest_path_length(G)
+	print ('Printing All pair shortest path') 
+	print ('--------------------------------------------------------------------------------------------------')
+        for vertex, d in G.nodes_iter(data=True):
+            for neighbor, d_ in G.nodes_iter(data=True):
+                v = str(vertex) 
+                nbr = str(neighbor)
+                if v is not nbr:
+                    print('from ' + v + ' -> ' + nbr) 
+                    try:
+                        print(nx.shortest_path(G,source=v, target=nbr, weight='w'))
+                        print(nx.shortest_path_length(G,source=v, target=nbr, weight='w'))
+                        #print(path_len[v][nbr])
+                    except nx.NetworkXNoPath:
+                        print('No path present ')
+
+        print ('--------------------------------------------------------------------------------------------------')
+
 
     def _packetin_icmp_req(self, msg, header_list):
         # Send ICMP echo reply.
