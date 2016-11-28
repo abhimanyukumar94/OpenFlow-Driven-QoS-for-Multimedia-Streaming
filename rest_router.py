@@ -172,7 +172,7 @@ PRIORITY_IP_HANDLING = 5
 
 PRIORITY_TYPE_ROUTE = 'priority_route'
 #G = nx.dodecahedral_graph()
-G = nx.Graph()
+G = nx.DiGraph()
 ev_map = {}
 lock = threading.Lock()
 
@@ -273,7 +273,7 @@ class RestRouterAPI(app_manager.RyuApp):
 
 
         print ('starting congestion module')
-        self.monitor_thread = hub.spawn(self._monitor)
+        #self.monitor_thread = hub.spawn(self._monitor)
 
     def _monitor(self):
         while True:
@@ -1073,7 +1073,7 @@ class VlanRouter(object):
 
     def packet_in_handler(self, msg, header_list):
         # Check invalid TTL (for OpenFlow V1.2/1.3)
-        #self.print_all_shortest_paths()
+        self.print_all_shortest_paths()
         ofproto = self.dp.ofproto
         if ofproto.OFP_VERSION == ofproto_v1_2.OFP_VERSION or \
                 ofproto.OFP_VERSION == ofproto_v1_3.OFP_VERSION:
@@ -1138,6 +1138,29 @@ class VlanRouter(object):
         self.logger.info('Graph edges are: ' + str(G.edges(data=True)), extra=self.sw_id)
         #nx.draw(G)
         #plt.draw()
+        #Add an edge in Graph
+        switch_id = str(self.sw_id['sw_id'])
+        #search in Graph, which switch id has src_ip
+        src_ip_tmp = src_ip + '/24'
+        for n, d in G.nodes_iter(data=True):
+            if src_ip_tmp in d and not G.has_edge(switch_id, str(n)): 
+                print ("adding edge from " + switch_id + " to " + str(n))
+                in_prt = self.ofctl.get_packetin_inport(msg)
+                wt = 1
+                port_dict = {switch_id : in_prt, str(n): -1}
+                G.add_edge(switch_id, str(n), w=wt, port_dict = port_dict)
+            if src_ip_tmp in d and not G.has_edge(str(n), switch_id ): 
+                print ("adding edge from " + str(n) + " to " + switch_id )
+                in_prt = self.ofctl.get_packetin_inport(msg)
+                wt = 1
+                port_dict = {switch_id : in_prt, str(n): -1}
+                G.add_edge(str(n), switch_id, w=wt, port_dict = port_dict)
+            if src_ip_tmp in d and G.has_edge(switch_id, str(n)):
+                G[switch_id][str(n)]['port_dict'][switch_id] = self.ofctl.get_packetin_inport(msg)
+            if src_ip_tmp in d and G.has_edge(str(n), switch_id ):
+                G[str(n)][switch_id]['port_dict'][switch_id] = self.ofctl.get_packetin_inport(msg)
+                        
+                
 
         if src_ip == dst_ip:
             # GARP -> packet forward (normal)
@@ -1192,23 +1215,6 @@ class VlanRouter(object):
                 self.logger.info('Send ARP reply to [%s]', srcip,
                                  extra=self.sw_id)
 
-                #Add an edge in Graph
-               
-                switch_id = str(self.sw_id['sw_id'])
-                #search in Graph, which switch id has src_ip
-                src_ip = src_ip + '/24'
-                for n, d in G.nodes_iter(data=True):
-                    if src_ip in d and not G.has_edge(switch_id, str(n)): 
-                        print ("adding edge from " + switch_id + " to " + str(n))
-                        #wt = random.randrange(1,10,1)
-                        in_prt = self.ofctl.get_packetin_inport(msg)
-                        wt = 1
-                        port_dict = {switch_id : in_prt, str(n): -1}
-                        G.add_edge(switch_id, str(n), w=wt, port_dict = port_dict)
-		    if src_ip in d and G.has_edge(switch_id, str(n)):
-                        G[switch_id][str(n)]['port_dict'][switch_id] = self.ofctl.get_packetin_inport(msg)
-                        
-                
 
             elif header_list[ARP].opcode == arp.ARP_REPLY:
                 #  ARP reply to router port -> suspend packets forward
