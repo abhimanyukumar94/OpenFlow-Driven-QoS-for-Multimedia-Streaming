@@ -273,7 +273,7 @@ class RestRouterAPI(app_manager.RyuApp):
 
 
         print ('starting congestion module')
-        #self.monitor_thread = hub.spawn(self._monitor)
+        self.monitor_thread = hub.spawn(self._monitor)
 
     def _monitor(self):
         while True:
@@ -374,12 +374,12 @@ class RestRouterAPI(app_manager.RyuApp):
 
         lock.acquire()
         print(list(ev_map))
-	print('datapath         port     '
-                         'total-bytes	Bandwidth	Weight')
-                         
-        print('---------------- '
-                         '--------	---------	---------	-----------')
-
+#	print('datapath         port     '
+#                         'total-bytes	Bandwidth	Weight')
+#                         
+#        print('---------------- '
+#                         '--------	---------	---------	-----------')
+#
 	
 	
 	body.sort(key=attrgetter('port_no'))
@@ -388,17 +388,40 @@ class RestRouterAPI(app_manager.RyuApp):
 	while i < len(body) and i < len(body1):
                 stat = body[i]
         	stat1 = body1[i]
-		bytes0 = stat.rx_bytes + stat.tx_bytes
-		bytes1 = stat1.rx_bytes + stat1.tx_bytes
-		TB = - bytes1 - bytes0
+		#bytes0 = stat.rx_bytes + stat.tx_bytes
+		bytes0 = stat.tx_bytes
+
+		#bytes1 = stat1.rx_bytes  + stat1.tx_bytes
+		bytes1 = stat1.tx_bytes
+
+		TB = bytes0 - bytes1
 		BW = float(TB*8/1)
           	Wgt = float(BW/10000000)
 #            	self.logger.info('%016x %8x %8d     %8.5f           %8.9f',
 #                             	ev.msg.datapath.id, stat.port_no
 #                             	,TB, BW, Wgt)
-            	print ("%016x %8x %8d     %8.5f           %8.9f" % (
-                             	ev.msg.datapath.id, stat.port_no
-                             	,TB, BW, Wgt))
+#            	print ("%016x %8x %8d     %8.5f           %8.9f" % (
+#                             	ev.msg.datapath.id, stat.port_no
+#                             	,TB, BW, Wgt))
+#
+                sw_id = dpid_lib.dpid_to_str(ev.msg.datapath.id)
+                print ('switch id = %s ' % sw_id)
+                port = stat.port_no
+
+                #find if there is an edge with start point at sw_id
+                
+                print('printing edges #######################################')
+                for u, v, d in G.edges(data=True):
+                    print ('%s : %s { %s }' % (u, v, d))
+                    if u == sw_id:
+                        print (u + ' is in edges !!!!!===========================!!!!')
+                        for k,val in d['port_dict'].items():
+                            print ('switch_id: ' + str(u) + ' | port: ' + str(v))
+                            if stat.port_no ==  val:
+                                new_weight = max(1, Wgt)
+                                print ('updating weight of edge ' + u + '->' + v + 'with' + str(new_weight))
+                                G[u][v]['w'] = new_weight
+                
 
                 #print ('Port Number -> %s | Total bytes sent: %s | Bandwidth %s | Edge Weight [%s]', stat.port_no, TB, BW, Wgt)
 		i = i + 1
@@ -1146,13 +1169,18 @@ class VlanRouter(object):
             if src_ip_tmp in d and not G.has_edge(switch_id, str(n)): 
                 print ("adding edge from " + switch_id + " to " + str(n))
                 in_prt = self.ofctl.get_packetin_inport(msg)
+                #wt = random.randrange(1,10,1)
                 wt = 1
+
                 port_dict = {switch_id : in_prt, str(n): -1}
                 G.add_edge(switch_id, str(n), w=wt, port_dict = port_dict)
             if src_ip_tmp in d and not G.has_edge(str(n), switch_id ): 
                 print ("adding edge from " + str(n) + " to " + switch_id )
                 in_prt = self.ofctl.get_packetin_inport(msg)
+                
+                wt = random.randrange(1,10,1)
                 wt = 1
+
                 port_dict = {switch_id : in_prt, str(n): -1}
                 G.add_edge(str(n), switch_id, w=wt, port_dict = port_dict)
             if src_ip_tmp in d and G.has_edge(switch_id, str(n)):
