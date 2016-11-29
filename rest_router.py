@@ -273,7 +273,7 @@ class RestRouterAPI(app_manager.RyuApp):
 
 
         print ('starting congestion module')
-        self.monitor_thread = hub.spawn(self._monitor)
+        #self.monitor_thread = hub.spawn(self._monitor)
 
     def _monitor(self):
         while True:
@@ -285,10 +285,10 @@ class RestRouterAPI(app_manager.RyuApp):
             #    print(router)
     
             for datapath in RouterController.get_routers():
-                print(datapath)
+                #print(datapath)
                 if datapath is None:
                     pass
-                print('sending Stat request to the above')
+                #print('sending Stat request to the above')
                 ofproto = datapath.ofproto
                 parser = datapath.ofproto_parser
     
@@ -373,13 +373,13 @@ class RestRouterAPI(app_manager.RyuApp):
 	body1 = ev1.msg.body
 
         lock.acquire()
-        print(list(ev_map))
-#	print('datapath         port     '
-#                         'total-bytes	Bandwidth	Weight')
-#                         
-#        print('---------------- '
-#                         '--------	---------	---------	-----------')
-#
+#       print(list(ev_map))
+	print('datapath         port     '
+                         'total-bytes	Link Utilization(%)	Weight')
+                         
+        print('---------------- '
+                         '--------	---------	---------	-----------')
+
 	
 	
 	body.sort(key=attrgetter('port_no'))
@@ -395,34 +395,33 @@ class RestRouterAPI(app_manager.RyuApp):
 		bytes1 = stat1.tx_bytes
 
 		TB = bytes0 - bytes1
-		BW = float(TB*8/1)
-          	Wgt = float(BW/10000000)
+		BW = float(TB*8/100)
+          	Wgt = float(BW/10)
 #            	self.logger.info('%016x %8x %8d     %8.5f           %8.9f',
 #                             	ev.msg.datapath.id, stat.port_no
 #                             	,TB, BW, Wgt)
-#            	print ("%016x %8x %8d     %8.5f           %8.9f" % (
-#                             	ev.msg.datapath.id, stat.port_no
-#                             	,TB, BW, Wgt))
-#
+            	print ("%016x %8x %8d     %8.5f           %8.9f" % (
+                             	ev.msg.datapath.id, stat.port_no
+                             	,bytes0, BW, Wgt))
+
                 sw_id = dpid_lib.dpid_to_str(ev.msg.datapath.id)
                 print ('switch id = %s ' % sw_id)
                 port = stat.port_no
 
                 #find if there is an edge with start point at sw_id
                 
-                print('printing edges #######################################')
+                #print('printing edges #######################################')
                 for u, v, d in G.edges(data=True):
-                    print ('%s : %s { %s }' % (u, v, d))
+                    #print ('%s : %s { %s }' % (u, v, d))
                     if u == sw_id:
-                        print (u + ' is in edges !!!!!===========================!!!!')
+                        #print (u + ' is in edges !!!!!===========================!!!!')
                         for k,val in d['port_dict'].items():
-                            print ('switch_id: ' + str(u) + ' | port: ' + str(v))
+                            #print ('switch_id: ' + str(u) + ' | port: ' + str(v))
                             if stat.port_no ==  val:
                                 new_weight = max(1, Wgt)
-                                print ('updating weight of edge ' + u + '->' + v + 'with' + str(new_weight))
+                                #print ('updating weight of edge ' + u + '->' + v + 'with ' + str(new_weight))
                                 G[u][v]['w'] = new_weight
                 
-
                 #print ('Port Number -> %s | Total bytes sent: %s | Bandwidth %s | Edge Weight [%s]', stat.port_no, TB, BW, Wgt)
 		i = i + 1
 	#overwriting the previous event 	
@@ -1163,40 +1162,36 @@ class VlanRouter(object):
         #plt.draw()
         #Add an edge in Graph
         switch_id = str(self.sw_id['sw_id'])
-        #search in Graph, which switch id has src_ip
-        src_ip_tmp = src_ip + '/24'
-        for n, d in G.nodes_iter(data=True):
-            if src_ip_tmp in d and not G.has_edge(switch_id, str(n)): 
-                print ("adding edge from " + switch_id + " to " + str(n))
-                in_prt = self.ofctl.get_packetin_inport(msg)
-                #wt = random.randrange(1,10,1)
-                wt = 1
-
-                port_dict = {switch_id : in_prt, str(n): -1}
-                G.add_edge(switch_id, str(n), w=wt, port_dict = port_dict)
-            if src_ip_tmp in d and not G.has_edge(str(n), switch_id ): 
-                print ("adding edge from " + str(n) + " to " + switch_id )
-                in_prt = self.ofctl.get_packetin_inport(msg)
-                
-                wt = random.randrange(1,10,1)
-                wt = 1
-
-                port_dict = {switch_id : in_prt, str(n): -1}
-                G.add_edge(str(n), switch_id, w=wt, port_dict = port_dict)
-            if src_ip_tmp in d and G.has_edge(switch_id, str(n)):
-                G[switch_id][str(n)]['port_dict'][switch_id] = self.ofctl.get_packetin_inport(msg)
-            if src_ip_tmp in d and G.has_edge(str(n), switch_id ):
-                G[str(n)][switch_id]['port_dict'][switch_id] = self.ofctl.get_packetin_inport(msg)
+#        #search in Graph, which switch id has src_ip
+#        src_ip_tmp = src_ip + '/24'
+#        for n, d in G.nodes_iter(data=True):
+#            if src_ip_tmp in d and not G.has_edge(switch_id, str(n)): 
+#                print ("adding edge from " + switch_id + " to " + str(n))
+#                in_prt = self.ofctl.get_packetin_inport(msg)
+#                #wt = random.randrange(1,10,1)
+#                wt = 1
+#
+#                port_dict = {switch_id : in_prt, str(n): -1}
+#                G.add_edge(switch_id, str(n), w=wt, port_dict = port_dict)
+#            #if src_ip_tmp in d and not G.has_edge(str(n), switch_id ): 
+#            #    print ("adding edge from " + str(n) + " to " + switch_id )
+#            #    in_prt = self.ofctl.get_packetin_inport(msg)
+#            #    
+#            #    wt = random.randrange(1,10,1)
+#            #    wt = 1
+#
+#            #    port_dict = {switch_id : in_prt, str(n): -1}
+#            #    G.add_edge(str(n), switch_id, w=wt, port_dict = port_dict)
+#            if src_ip_tmp in d and G.has_edge(str(n), switch_id):
+#                #G[switch_id][str(n)]['port_dict'][str(n)] = self.ofctl.get_packetin_inport(msg)
+#                G[str(n)][switch_id]['port_dict'][switch_id] = self.ofctl.get_packetin_inport(msg)
+#
+#            if src_ip_tmp in d and G.has_edge(switch_id, str(n) ):
+#                G[str(n)][switch_id]['port_dict'][switch_id] = self.ofctl.get_packetin_inport(msg)
                         
-                
 
         if src_ip == dst_ip:
             # GARP -> packet forward (normal)
-            output = self.ofctl.dp.ofproto.OFPP_NORMAL
-            self.ofctl.send_packet_out(in_port, output, msg.data)
-            self.logger.info('Receive GARP from [%s].', srcip,
-                             extra=self.sw_id)
-            self.logger.info('Send GARP (normal).', extra=self.sw_id)
 
             #Edge found
             # Find the switch id of the src_ip
@@ -1208,6 +1203,30 @@ class VlanRouter(object):
             #        print ("Adding edge to Graph ..." + n + " <-------> " + switch_id )
             #        G.add_edge(switch_id, n , weight = 1)
             #        break
+            
+
+            self_subnet_match_addr = self.address_data.get_data(ip=src_ip)
+            if self_subnet_match_addr is None:
+                print('flood GARP request. No IP address present to reply')
+                return
+
+            for u, d in G.nodes_iter(data=True):
+                for val in d:
+                    if src_ip in val:
+                        print('Src_IP in GARP:  ' + str(src_ip) + ' found as an address of switch ' + str(u))
+                        if not G.has_edge(str(u), switch_id):
+                            print('Adding edge ')
+                            G.add_edge(str(u), switch_id, w = 1)
+                        if not G.has_edge(switch_id, str(u)):
+                            self.send_arp_request(self_subnet_match_addr.default_gw, self_subnet_match_addr.default_gw)
+            
+            output = self.ofctl.dp.ofproto.OFPP_NORMAL
+            self.ofctl.send_packet_out(in_port, output, msg.data)
+            self.logger.info('Receive GARP from [%s].', srcip,
+                             extra=self.sw_id)
+            self.logger.info('Send GARP (normal).', extra=self.sw_id)
+    
+
             print ('printing graph node list')
             print (list(G))
 
