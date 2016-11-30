@@ -173,6 +173,9 @@ PRIORITY_IP_HANDLING = 5
 
 PRIORITY_TYPE_ROUTE = 'priority_route'
 #G = nx.dodecahedral_graph()
+
+QOS_ENABLED = False
+
 G = nx.DiGraph()
 ev_map = {}
 lock = threading.Lock()
@@ -227,7 +230,7 @@ class RestRouterAPI(app_manager.RyuApp):
 
     _CONTEXTS = {'dpset': dpset.DPSet,
                  'wsgi': WSGIApplication}
-
+    
     def __init__(self, *args, **kwargs):
         super(RestRouterAPI, self).__init__(*args, **kwargs)
 
@@ -242,6 +245,9 @@ class RestRouterAPI(app_manager.RyuApp):
         wsgi.registory['RouterController'] = self.data
         requirements = {'switch_id': SWITCHID_PATTERN,
                         'vlan_id': VLANID_PATTERN}
+
+        print('System Arguments')
+        print(sys.argv[1:])
 
         # For no vlan data
         path = '/router/{switch_id}'
@@ -273,8 +279,9 @@ class RestRouterAPI(app_manager.RyuApp):
                        conditions=dict(method=['DELETE']))
 
 
-        print ('starting congestion module')
-        #self.monitor_thread = hub.spawn(self._monitor)
+        if QOS_ENABLED:
+            print ('starting congestion module')
+            self.monitor_thread = hub.spawn(self._monitor)
 
     def _monitor(self):
         while True:
@@ -956,11 +963,12 @@ class VlanRouter(object):
 
         outport = self.ofctl.dp.ofproto.OFPP_CONTROLLER
         #priority = self._get_priority(PRIORITY_NORMAL)
-        priority = 1000
-        self.ofctl.set_qos_routing_flow(
+        if QOS_ENABLED:
+            priority = 1000
+            self.ofctl.set_qos_routing_flow(
             cookie, priority, outport, dl_vlan=self.vlan_id)
             
-        self.logger.info('Set QoS L3 switching default (controller) flow [cookie=0x%x]',
+            self.logger.info('Set QoS L3 switching default (controller) flow [cookie=0x%x]',
                          cookie, extra=self.sw_id)
 
 
@@ -1292,13 +1300,20 @@ class VlanRouter(object):
                         print('Src_IP in GARP:  ' + str(src_ip) + ' found as an address of switch ' + str(u))
                         if not G.has_edge(str(u), switch_id):
                             print('Adding edge ')
-			    #port_dict = {switch_id: inport, str(u) : -1}
-                            G.add_edge(str(u), switch_id, w = 1)
+                            port_dict = {switch_id: in_port, str(u) : -1}
+                            G.add_edge(str(u), switch_id, w = 1, port_dict=port_dict)
 
                         if not G.has_edge(switch_id, str(u)):
                             self.send_arp_request(self_subnet_match_addr.default_gw, self_subnet_match_addr.default_gw)
-			    print('Sending GARP....')
-            
+                            print('Sending GARP....')
+                if G.has_edge(str(u), switch_id) and G.has_edge(switch_id, str(u)):
+                    if G[switch_id][str(u)]['port_dict'][switch_id] == -1:
+                        print('Updating edge from %s -> %s with in_port %s' % (switch_id, str(u), str(in_port)))
+                        G[switch_id][str(u)]['port_dict'][switch_id] = in_port
+                    if G[str(u)][switch_id]['port_dict'][str(u)] == -1:
+                        print('Updating edge from %s -> %s with in_port %s' % (str(u), switch_id, G[switch_id][str(u)]['port_dict'][str(u)] ))
+                        G[str(u)][switch_id]['port_dict'][str(u)] = G[switch_id][str(u)]['port_dict'][str(u)]
+
             output = self.ofctl.dp.ofproto.OFPP_NORMAL
             self.ofctl.send_packet_out(in_port, output, msg.data)
             self.logger.info('Receive GARP from [%s].', srcip,
