@@ -785,7 +785,7 @@ class VlanRouter(object):
         self.ofctl = OfCtl.factory(dp, logger)
 
         #Set flow: default route (drop)
-        self._set_defaultroute_drop()
+        self._set_default_route_rule()
 
     def delete(self, waiters):
         # Delete flow.
@@ -954,6 +954,15 @@ class VlanRouter(object):
         self.logger.info('Set L3 switching (controller) flow [cookie=0x%x]',
                          cookie, extra=self.sw_id)
 
+        outport = self.ofctl.dp.ofproto.OFPP_CONTROLLER
+        #priority = self._get_priority(PRIORITY_NORMAL)
+        priority = 1000
+        self.ofctl.set_qos_routing_flow(
+            cookie, priority, outport, dl_vlan=self.vlan_id)
+            
+        self.logger.info('Set QoS L3 switching default (controller) flow [cookie=0x%x]',
+                         cookie, extra=self.sw_id)
+
 
         # Send GARP
         self.send_arp_request(address.default_gw, address.default_gw)
@@ -978,13 +987,13 @@ class VlanRouter(object):
             self.send_arp_request(src_ip, dst_ip)
             return route.route_id
 
-    def _set_defaultroute_drop(self):
+    def _set_default_route_rule(self):
         cookie = self._id_to_cookie(REST_VLANID, self.vlan_id)
         priority = self._get_priority(PRIORITY_DEFAULT_ROUTING)
         outport = self.ofctl.dp.ofproto.OFPP_CONTROLLER # for drop
         self.ofctl.set_routing_flow(cookie, priority, outport,
                                     dl_vlan=self.vlan_id)
-        self.logger.info('Set default route (drop) flow [cookie=0x%x]',
+        self.logger.info('Set default route (packet_in) flow [cookie=0x%x]',
                          cookie, extra=self.sw_id)
 
     def _set_route_packetin(self, route):
@@ -1114,7 +1123,7 @@ class VlanRouter(object):
             route_type = get_priority_type(flow_stats.priority,
                                            vid=self.vlan_id)
             if route_type == PRIORITY_DEFAULT_ROUTING:
-                self._set_defaultroute_drop()
+                self._set_default_route_rule()
 
         msg = {}
         if delete_ids:
@@ -1207,7 +1216,7 @@ class VlanRouter(object):
                             self.ofctl.send_packet_out(in_port, output, msg.data)
 
                     
-                #self._set_defaultroute_drop()
+                #self._set_default_route_rule()
                 #self._packetin_to_node(msg, header_list)
 
 
@@ -2142,11 +2151,55 @@ class OfCtl_after_v1_2(OfCtl):
         actions = actions or []
         inst = [ofp_parser.OFPInstructionActions(ofp.OFPIT_APPLY_ACTIONS,
                                                  actions)]
+    
+        print ('Match for normal flow: ')
+        print (match)
 
         m = ofp_parser.OFPFlowMod(self.dp, cookie, 0, 0, cmd, idle_timeout,
                                   0, priority, UINT32_MAX, ofp.OFPP_ANY,
                                   ofp.OFPG_ANY, 0, match, inst)
         self.dp.send_msg(m)
+
+    def set_QoS_flow(self, cookie, priority,tp_src=0, tp_dst=0, dl_type=0, dl_dst=0, dl_vlan=0,
+                 nw_src=0, src_mask=32, nw_dst=0, dst_mask=32,
+                 nw_proto=0, idle_timeout=0, actions=None):
+        ofp = self.dp.ofproto
+        ofp_parser = self.dp.ofproto_parser
+        cmd = ofp.OFPFC_ADD
+
+        # Match
+        match = ofp_parser.OFPMatch(udp_src=5004, eth_type=0x0800, ip_proto=17)
+        print (match)
+        if dl_type:
+            match.set_dl_type(dl_type)
+        if dl_dst:
+            match.set_dl_dst(dl_dst)
+        if dl_vlan:
+            match.set_vlan_vid(dl_vlan)
+        if nw_src:
+            match.set_ipv4_src_masked(ipv4_text_to_int(nw_src),
+                                      mask_ntob(src_mask))
+        if nw_dst:
+            match.set_ipv4_dst_masked(ipv4_text_to_int(nw_dst),
+                                      mask_ntob(dst_mask))
+
+        #match.set_ip_proto(17) #udp
+
+        # Instructions
+        actions = actions or []
+        inst = [ofp_parser.OFPInstructionActions(ofp.OFPIT_APPLY_ACTIONS,
+                                                 actions)]
+
+
+        match = ofp_parser.OFPMatch(udp_src=5004, eth_type=0x0800, ip_proto=17)
+        print ('Match for QoS flow: ')
+        print(match)
+        m = ofp_parser.OFPFlowMod(self.dp, cookie, 0, 0, cmd, idle_timeout,
+                                  0, priority, UINT32_MAX, ofp.OFPP_ANY,
+                                  ofp.OFPG_ANY, 0, match, inst)
+        self.dp.send_msg(m)
+
+
 
     def set_routing_flow(self, cookie, priority, outport, dl_vlan=0,
                          nw_src=0, src_mask=32, nw_dst=0, dst_mask=32,
@@ -2171,6 +2224,33 @@ class OfCtl_after_v1_2(OfCtl):
                       nw_src=nw_src, src_mask=src_mask,
                       nw_dst=nw_dst, dst_mask=dst_mask,
                       idle_timeout=idle_timeout, actions=actions)
+
+
+    def set_qos_routing_flow(self, cookie, priority, outport, tp_src=0, tp_dst=0, dl_vlan=0,
+                         nw_src=0, src_mask=32, nw_dst=0, dst_mask=32,
+                         src_mac=0, dst_mac=0, idle_timeout=0, dec_ttl=False):
+	self.logger.info('Setting QoS Flows in set_qos_routing_flow ',extra=self.sw_id)
+        ofp = self.dp.ofproto
+        ofp_parser = self.dp.ofproto_parser
+
+        dl_type = ether.ETH_TYPE_IP
+
+        actions = []
+        if dec_ttl:
+            actions.append(ofp_parser.OFPActionDecNwTtl())
+        if src_mac:
+            actions.append(ofp_parser.OFPActionSetField(eth_src=src_mac))
+        if dst_mac:
+            actions.append(ofp_parser.OFPActionSetField(eth_dst=dst_mac))
+        if outport is not None:
+            actions.append(ofp_parser.OFPActionOutput(outport, 65535))
+
+        self.set_QoS_flow(cookie, priority, dl_type=dl_type, dl_vlan=dl_vlan,
+                      nw_src=nw_src, src_mask=src_mask,
+                      nw_dst=nw_dst, dst_mask=dst_mask,
+                      idle_timeout=idle_timeout, actions=actions)
+
+ 
 
     def delete_flow(self, flow_stats):
         ofp = self.dp.ofproto
