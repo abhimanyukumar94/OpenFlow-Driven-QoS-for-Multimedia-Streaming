@@ -1202,6 +1202,10 @@ class VlanRouter(object):
                             next_ip = self.get_matching_ip(switch_id, next_hop_switch)
                             print ('next hop ' + str(next_ip))
                             self._set_routing_data(dest_ip, next_ip)
+                            in_port = self.ofctl.get_packetin_inport(msg)
+                            output = self.ofctl.dp.ofproto.OFPP_NORMAL
+                            self.ofctl.send_packet_out(in_port, output, msg.data)
+
                     
                 #self._set_defaultroute_drop()
                 #self._packetin_to_node(msg, header_list)
@@ -1309,35 +1313,35 @@ class VlanRouter(object):
                 self.logger.info('Receive ARP from an internal host [%s].',
                                  srcip, extra=self.sw_id)
                 self.logger.info('Send ARP (normal)', extra=self.sw_id)
-	    else:
-	    	self.logger.info('dst_ip NOT in rt_ports ', extra=self.sw_id)
-                # Packet to internal host or gateway router.
-                # self._packetin_to_node(msg, header_list)
+	    #else:
+	    	#self.logger.info('dst_ip NOT in rt_ports ', extra=self.sw_id)
+                ## Packet to internal host or gateway router.
+                ## self._packetin_to_node(msg, header_list)
 
-		# calculate shortest path: (Non QoS)
-                
-                switch_id = str(self.sw_id['sw_id'])
-                dest_ip = dst_ip
-		print('Checking if we have shortest path to reach %s from %s ' %  (dest_ip, switch_id))
-                dest_sw_id = None
-                for vertex, d in G.nodes_iter(data=True):
-                    for val in d:
-                        if dest_ip[0: dest_ip.rindex('.')] in val:
-                            dest_sw_id = str(vertex)
-                            print('switch holding destination ip is %s ' % dest_sw_id)
-                            break;
+		## calculate shortest path: (Non QoS)
+                #
+                #switch_id = str(self.sw_id['sw_id'])
+                #dest_ip = dst_ip
+		#print('Checking if we have shortest path to reach %s from %s ' %  (dest_ip, switch_id))
+                #dest_sw_id = None
+                #for vertex, d in G.nodes_iter(data=True):
+                #    for val in d:
+                #        if dest_ip[0: dest_ip.rindex('.')] in val:
+                #            dest_sw_id = str(vertex)
+                #            print('switch holding destination ip is %s ' % dest_sw_id)
+                #            break;
 
-                if dest_sw_id is None:
-                    #self._packetin_tcp_udp(msg, header_list)
-                    print('Destination(switch) Unreachable!!')
-                else:
-                    path = self.get_shortest_path(switch_id, dest_sw_id)
-                    if path is None:
-                        print('Destination Unreachable!!')
-                    else:
-                        print('Shortest path is ')
-                        print(path)
-                 
+                #if dest_sw_id is None:
+                #    #self._packetin_tcp_udp(msg, header_list)
+                #    print('Destination(switch) Unreachable!!')
+                #else:
+                #    path = self.get_shortest_path(switch_id, dest_sw_id)
+                #    if path is None:
+                #        print('Destination Unreachable!!')
+                #    else:
+                #        print('Shortest path is ')
+                #        print(path)
+                # 
 
         else:
 	    self.logger.info('dst_ip in rt_ports ', extra=self.sw_id)
