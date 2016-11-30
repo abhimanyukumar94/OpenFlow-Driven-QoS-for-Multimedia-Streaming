@@ -307,7 +307,7 @@ class RestRouterAPI(app_manager.RyuApp):
 
     def _monitor(self):
         while True:
-            self.print_all_shortest_paths()
+            #self.print_all_shortest_paths()
             hub.sleep(STATS_REQUEST_INTERVAL)
             # get all the datapaths
             print ('Printing routers*******************************************************')
@@ -404,12 +404,12 @@ class RestRouterAPI(app_manager.RyuApp):
 
         #lock.acquire()
 #       print(list(ev_map))
-	print('datapath         port     '
-                         'total-bytes	Link Utilization(Mbps)	Weight')
-                         
-        print('---------------- '
-                         '--------	---------	---------	-----------')
-
+#	print('datapath         port     '
+#                         'total-bytes	Link Utilization(Mbps)	Weight')
+#                         
+#        print('---------------- '
+#                         '--------	---------	---------	-----------')
+#
 	body.sort(key=attrgetter('port_no'))
         body1.sort(key=attrgetter('port_no'))
 	i = 0
@@ -429,10 +429,10 @@ class RestRouterAPI(app_manager.RyuApp):
 #            	self.logger.info('%016x %8x %8d     %8.5f           %8.9f',
 #                             	ev.msg.datapath.id, stat.port_no
 #                             	,TB, BW, Wgt)
-            	print ("%016x %8x %8d     %8.5f           %8.9f" % (
-                             	ev.msg.datapath.id, stat.port_no
-                             	,bytes0, BW, Wgt))
-
+#            	print ("%016x %8x %8d     %8.5f           %8.9f" % (
+#                             	ev.msg.datapath.id, stat.port_no
+#                             	,bytes0, BW, Wgt))
+#
                 sw_id = dpid_lib.dpid_to_str(ev.msg.datapath.id)
                 print ('switch id = %s ' % sw_id)
                 port = stat.port_no
@@ -998,7 +998,7 @@ class VlanRouter(object):
 
         return address.address_id
 
-    def _set_routing_data(self, destination, gateway):
+    def _set_routing_data(self, destination, gateway, qos=False):
         err_msg = 'Invalid [%s] value.' % REST_GATEWAY
         dst_ip = ip_addr_aton(gateway, err_msg=err_msg)
         address = self.address_data.get_data(ip=dst_ip)
@@ -1012,7 +1012,7 @@ class VlanRouter(object):
         else:
             src_ip = address.default_gw
             route = self.routing_tbl.add(destination, gateway)
-            self._set_route_packetin(route)
+            self._set_route_packetin(route, qos)
             self.send_arp_request(src_ip, dst_ip)
             return route.route_id
 
@@ -1025,10 +1025,14 @@ class VlanRouter(object):
         self.logger.info('Set default route (packet_in) flow [cookie=0x%x]',
                          cookie, extra=self.sw_id)
 
-    def _set_route_packetin(self, route):
+    def _set_route_packetin(self, route, qos=False):
         cookie = self._id_to_cookie(REST_ROUTEID, route.route_id)
         priority, log_msg = self._get_priority(PRIORITY_TYPE_ROUTE,
                                                route=route)
+
+        if qos == True:
+            priority = 2000
+        
         self.ofctl.set_packetin_flow(cookie, priority,
                                      dl_type=ether.ETH_TYPE_IP,
                                      dl_vlan=self.vlan_id,
@@ -1247,7 +1251,11 @@ class VlanRouter(object):
                             next_hop_switch = path[1]
                             next_ip = self.get_matching_ip(switch_id, next_hop_switch)
                             print ('next hop ' + str(next_ip))
-                            self._set_routing_data(dest_ip, next_ip)
+                            if dest_port == 5004:
+                                self._set_routing_data(dest_ip, next_ip, True)
+                            else:
+                                self._set_routing_data(dest_ip, next_ip)
+
                             in_port = self.ofctl.get_packetin_inport(msg)
                             output = self.ofctl.dp.ofproto.OFPP_NORMAL
                             self.ofctl.send_packet_out(in_port, output, msg.data)
@@ -1611,13 +1619,25 @@ class VlanRouter(object):
                 cookie = self._id_to_cookie(REST_ROUTEID, value.route_id)
                 priority, log_msg = self._get_priority(PRIORITY_TYPE_ROUTE,
                                                        route=value)
-                self.ofctl.set_routing_flow(cookie, priority, out_port,
+
+                if self.routing_tbl[key].qos_flag == True:
+                    priority = 5000
+                    self.ofctl.set_routing_flow(cookie, priority, out_port,
                                             dl_vlan=self.vlan_id,
                                             src_mac=dst_mac,
                                             dst_mac=src_mac,
                                             nw_dst=value.dst_ip,
                                             dst_mask=value.netmask,
                                             dec_ttl=True)
+                else: 
+                    self.ofctl.set_routing_flow(cookie, priority, out_port,
+                                            dl_vlan=self.vlan_id,
+                                            src_mac=dst_mac,
+                                            dst_mac=src_mac,
+                                            nw_dst=value.dst_ip,
+                                            dst_mask=value.netmask,
+                                            dec_ttl=True)
+
                 self.logger.info('Set %s flow [cookie=0x%x]', log_msg, cookie,
                                  extra=self.sw_id)
         return gateway_flg
@@ -1754,7 +1774,7 @@ class RoutingTable(dict):
         super(RoutingTable, self).__init__()
         self.route_id = 1
 
-    def add(self, dst_nw_addr, gateway_ip):
+    def add(self, dst_nw_addr, gateway_ip, qos=False):
         err_msg = 'Invalid [%s] value.'
 
         if dst_nw_addr == DEFAULT_ROUTE:
@@ -1778,7 +1798,7 @@ class RoutingTable(dict):
             msg = 'Destination overlaps [route_id=%d]' % overlap_route
             raise CommandFailure(msg=msg)
 
-        routing_data = Route(self.route_id, dst_ip, netmask, gateway_ip)
+        routing_data = Route(self.route_id, dst_ip, netmask, gateway_ip, qos)
         ip_str = ip_addr_ntoa(dst_ip)
         key = '%s/%d' % (ip_str, netmask)
         self[key] = routing_data
@@ -1824,13 +1844,14 @@ class RoutingTable(dict):
 
 
 class Route(object):
-    def __init__(self, route_id, dst_ip, netmask, gateway_ip):
+    def __init__(self, route_id, dst_ip, netmask, gateway_ip, qos=False):
         super(Route, self).__init__()
         self.route_id = route_id
         self.dst_ip = dst_ip
         self.netmask = netmask
         self.gateway_ip = gateway_ip
         self.gateway_mac = None
+        self.qos_flag = qos
 
 
 class SuspendPacketList(list):
@@ -2038,6 +2059,17 @@ class OfCtl(object):
                       dl_vlan=dl_vlan, nw_dst=dst_ip, dst_mask=dst_mask,
                       nw_proto=nw_proto, actions=actions)
 
+    def set_qos_packetin_flow(self, cookie, priority, dl_type=0, dl_dst=0,
+                          dl_vlan=0, dst_ip=0, dst_mask=32, nw_proto=0):
+        miss_send_len = UINT16_MAX
+        actions = [self.dp.ofproto_parser.OFPActionOutput(
+            self.dp.ofproto.OFPP_CONTROLLER, miss_send_len)]
+        self.set_flow(cookie, priority, dl_type=dl_type, dl_dst=dl_dst,
+                      dl_vlan=dl_vlan, nw_dst=dst_ip, dst_mask=dst_mask,
+                      nw_proto=nw_proto, actions=actions)
+
+
+
     def send_stats_request(self, stats, waiters):
         self.dp.set_xid(stats)
         waiters_per_dp = waiters.setdefault(self.dp.id, {})
@@ -2228,6 +2260,7 @@ class OfCtl_after_v1_2(OfCtl):
         if nw_dst:
             match.set_ipv4_dst_masked(ipv4_text_to_int(nw_dst),
                                       mask_ntob(dst_mask))
+       # match.set_udp_dst(tp_dst)
 
         #match.set_ip_proto(17) #udp
 
@@ -2291,12 +2324,10 @@ class OfCtl_after_v1_2(OfCtl):
         if outport is not None:
             actions.append(ofp_parser.OFPActionOutput(outport, 65535))
 
-        self.set_QoS_flow(cookie, priority, dl_type=dl_type, dl_vlan=dl_vlan,
+        self.set_QoS_flow(cookie, priority,tp_src=0, tp_dst=5004, dl_type=dl_type, dl_vlan=dl_vlan,
                       nw_src=nw_src, src_mask=src_mask,
                       nw_dst=nw_dst, dst_mask=dst_mask,
                       idle_timeout=idle_timeout, actions=actions)
-
- 
 
     def delete_flow(self, flow_stats):
         ofp = self.dp.ofproto
