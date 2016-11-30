@@ -946,7 +946,8 @@ class VlanRouter(object):
                          cookie, extra=self.sw_id)
         
         outport = self.ofctl.dp.ofproto.OFPP_CONTROLLER
-        priority = self._get_priority(PRIORITY_IP_HANDLING)
+        #priority = self._get_priority(PRIORITY_NORMAL)
+        priority = 30
         self.ofctl.set_routing_flow(
             cookie, priority, outport, dl_vlan=self.vlan_id,
             nw_src=address.nw_addr, src_mask=address.netmask)
@@ -980,7 +981,7 @@ class VlanRouter(object):
     def _set_defaultroute_drop(self):
         cookie = self._id_to_cookie(REST_VLANID, self.vlan_id)
         priority = self._get_priority(PRIORITY_DEFAULT_ROUTING)
-        outport = None  # for drop
+        outport = self.ofctl.dp.ofproto.OFPP_CONTROLLER # for drop
         self.ofctl.set_routing_flow(cookie, priority, outport,
                                     dl_vlan=self.vlan_id)
         self.logger.info('Set default route (drop) flow [cookie=0x%x]',
@@ -1188,14 +1189,31 @@ class VlanRouter(object):
                     print('Destination(switch) Unreachable!!')
                 else:
                     path = self.get_shortest_path(switch_id, dest_sw_id)
+
                     if path is None:
                         print('Destination Unreachable!!')
                     else:
                         print('Shortest path is ')
                         print(path)
-                   
+                        if len(path) == 1:
+                            self._packetin_to_node(msg,header_list)
+                        else:
+                            next_hop_switch = path[1]
+                            next_ip = self.get_matching_ip(switch_id, next_hop_switch)
+                            print ('next hop ' + str(next_ip))
+                            self._set_routing_data(dest_ip, next_ip)
+                    
                 #self._set_defaultroute_drop()
                 #self._packetin_to_node(msg, header_list)
+
+
+    def get_matching_ip(self, src_sw, dst_sw):
+        for t in G.node[dst_sw]:
+            for d in G.node[src_sw]:
+                if d[0:d.rindex('.')] in t:
+                    return t[0:t.rindex('/')]
+            
+                
 
                 
     def _packetin_arp(self, msg, header_list):
