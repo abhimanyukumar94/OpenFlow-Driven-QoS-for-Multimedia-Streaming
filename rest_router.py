@@ -122,9 +122,9 @@ ICMP = icmp.icmp.__name__
 TCP = tcp.tcp.__name__
 UDP = udp.udp.__name__
 
-MAX_SUSPENDPACKETS = 50  # Threshold of the packet suspends thread count.
+MAX_SUSPENDPACKETS = 5000  # Threshold of the packet suspends thread count.
 
-ARP_REPLY_TIMER = 2  # sec
+ARP_REPLY_TIMER = 5  # sec
 OFP_REPLY_TIMER = 1.0  # sec
 CHK_ROUTING_TBL_INTERVAL = 1800  # sec
 
@@ -174,7 +174,8 @@ PRIORITY_IP_HANDLING = 5
 PRIORITY_TYPE_ROUTE = 'priority_route'
 #G = nx.dodecahedral_graph()
 
-QOS_ENABLED = False
+QOS_ENABLED = True
+STATS_REQUEST_INTERVAL = 10
 
 G = nx.DiGraph()
 ev_map = {}
@@ -283,9 +284,31 @@ class RestRouterAPI(app_manager.RyuApp):
             print ('starting congestion module')
             self.monitor_thread = hub.spawn(self._monitor)
 
+    def print_all_shortest_paths(self):
+	#path = nx.all_pairs_shortest_path(G, weight="weight")
+	#path_len = nx.all_pairs_shortest_path_length(G)
+	print ('Printing All pair shortest path') 
+	print ('--------------------------------------------------------------------------------------------------')
+        for vertex, d in G.nodes_iter(data=True):
+            for neighbor, d_ in G.nodes_iter(data=True):
+                v = str(vertex) 
+                nbr = str(neighbor)
+                if v is not nbr:
+                    print('from ' + v + ' -> ' + nbr) 
+                    try:
+                        print(nx.shortest_path(G,source=v, target=nbr, weight='w'))
+                        print(nx.shortest_path_length(G,source=v, target=nbr, weight='w'))
+                        #print(path_len[v][nbr])
+                    except nx.NetworkXNoPath:
+                        print('No path present ')
+
+        print ('--------------------------------------------------------------------------------------------------')
+
+
     def _monitor(self):
         while True:
-            hub.sleep(5)
+            self.print_all_shortest_paths()
+            hub.sleep(STATS_REQUEST_INTERVAL)
             # get all the datapaths
             print ('Printing routers*******************************************************')
             #print (len(RouterController.get_routers()))
@@ -307,7 +330,6 @@ class RestRouterAPI(app_manager.RyuApp):
                 datapath.send_msg(req)
 
 
-                
             # send Stats request
             #for router in 
             #    print('send stats request: %016x', datapath.id)
@@ -380,16 +402,14 @@ class RestRouterAPI(app_manager.RyuApp):
 	body = ev.msg.body
 	body1 = ev1.msg.body
 
-        lock.acquire()
+        #lock.acquire()
 #       print(list(ev_map))
 	print('datapath         port     '
-                         'total-bytes	Link Utilization(%)	Weight')
+                         'total-bytes	Link Utilization(Mbps)	Weight')
                          
         print('---------------- '
                          '--------	---------	---------	-----------')
 
-	
-	
 	body.sort(key=attrgetter('port_no'))
         body1.sort(key=attrgetter('port_no'))
 	i = 0
@@ -403,8 +423,9 @@ class RestRouterAPI(app_manager.RyuApp):
 		bytes1 = stat1.tx_bytes
 
 		TB = bytes0 - bytes1
-		BW = float(TB*8/100)
-          	Wgt = float(BW/10)
+		BW = float(TB*8/1000000) 
+                BW = BW//STATS_REQUEST_INTERVAL
+          	Wgt = float(BW * 10)
 #            	self.logger.info('%016x %8x %8d     %8.5f           %8.9f',
 #                             	ev.msg.datapath.id, stat.port_no
 #                             	,TB, BW, Wgt)
@@ -421,7 +442,7 @@ class RestRouterAPI(app_manager.RyuApp):
                 #print('printing edges #######################################')
                 for u, v, d in G.edges(data=True):
                     #print ('%s : %s { %s }' % (u, v, d))
-                    if u == sw_id:
+                    if v == sw_id:
                         #print (u + ' is in edges !!!!!===========================!!!!')
                         for k,val in d['port_dict'].items():
                             #print ('switch_id: ' + str(u) + ' | port: ' + str(v))
@@ -433,7 +454,7 @@ class RestRouterAPI(app_manager.RyuApp):
                 #print ('Port Number -> %s | Total bytes sent: %s | Bandwidth %s | Edge Weight [%s]', stat.port_no, TB, BW, Wgt)
 		i = i + 1
 	#overwriting the previous event 	
-        lock.release()
+        #lock.release()
 	ev_map[ev.msg.datapath] = ev
 
 
@@ -1205,7 +1226,15 @@ class VlanRouter(object):
                     #self._packetin_tcp_udp(msg, header_list)
                     print('Destination(switch) Unreachable!!')
                 else:
-                    path = self.get_shortest_path(switch_id, dest_sw_id)
+                    dest_port = 0
+                    if UDP in header_list:
+                        dest_port = header_list[UDP].dst_port
+                        print('Destination port is %s ' % (dest_port))
+    
+                    if dest_port == 5004:
+                        path = self.get_shortest_path(switch_id, dest_sw_id,qos=True)
+                    else:
+                        path = self.get_shortest_path(switch_id, dest_sw_id)
 
                     if path is None:
                         print('Destination Unreachable!!')
@@ -1430,10 +1459,12 @@ class VlanRouter(object):
         print ('--------------------------------------------------------------------------------------------------')
 
     def get_shortest_path(self, src, dst, qos=False):
+        if qos==True:
+            print('Finding shortest path for QoS traffic')
         path = None
         try:
             if qos == False:
-                path = nx.shortest_path(G, source = src, target= dst)
+                path = nx.shortest_path(G, source = src, target= dst, weight=None)
             else:
                 path = nx.shortest_path(G, source = src, target = dst, weight='w')
         except nx.NetworkXNoPath:
@@ -2183,7 +2214,7 @@ class OfCtl_after_v1_2(OfCtl):
         cmd = ofp.OFPFC_ADD
 
         # Match
-        match = ofp_parser.OFPMatch(udp_src=5004, eth_type=0x0800, ip_proto=17)
+        match = ofp_parser.OFPMatch()
         print (match)
         if dl_type:
             match.set_dl_type(dl_type)
@@ -2206,7 +2237,7 @@ class OfCtl_after_v1_2(OfCtl):
                                                  actions)]
 
 
-        match = ofp_parser.OFPMatch(udp_src=5004, eth_type=0x0800, ip_proto=17)
+        match = ofp_parser.OFPMatch(udp_dst=5004, eth_type=0x0800, ip_proto=17)
         print ('Match for QoS flow: ')
         print(match)
         m = ofp_parser.OFPFlowMod(self.dp, cookie, 0, 0, cmd, idle_timeout,
