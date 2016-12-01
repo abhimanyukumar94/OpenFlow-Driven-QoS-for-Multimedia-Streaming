@@ -175,6 +175,7 @@ PRIORITY_TYPE_ROUTE = 'priority_route'
 #G = nx.dodecahedral_graph()
 
 QOS_ENABLED = True
+QOS_PORT=5004
 STATS_REQUEST_INTERVAL = 10
 
 G = nx.DiGraph()
@@ -282,7 +283,7 @@ class RestRouterAPI(app_manager.RyuApp):
 
         if QOS_ENABLED:
             print ('starting congestion module')
-            self.monitor_thread = hub.spawn(self._monitor)
+#            self.monitor_thread = hub.spawn(self._monitor)
 
     def print_all_shortest_paths(self):
 	#path = nx.all_pairs_shortest_path(G, weight="weight")
@@ -975,17 +976,17 @@ class VlanRouter(object):
         
         outport = self.ofctl.dp.ofproto.OFPP_CONTROLLER
         #priority = self._get_priority(PRIORITY_NORMAL)
-        priority = 30
-        self.ofctl.set_routing_flow(
-            cookie, priority, outport, dl_vlan=self.vlan_id,
-            nw_src=address.nw_addr, src_mask=address.netmask)
-        self.logger.info('Set L3 switching (controller) flow [cookie=0x%x]',
-                         cookie, extra=self.sw_id)
-
+#        priority = 30
+#        self.ofctl.set_routing_flow(
+#            cookie, priority, outport, dl_vlan=self.vlan_id,
+#            nw_src=address.nw_addr, src_mask=address.netmask)
+#        self.logger.info('Set L3 switching (controller) flow [cookie=0x%x]',
+#                         cookie, extra=self.sw_id)
+#
         outport = self.ofctl.dp.ofproto.OFPP_CONTROLLER
         #priority = self._get_priority(PRIORITY_NORMAL)
         if QOS_ENABLED:
-            priority = 1000
+            priority = 30
             self.ofctl.set_qos_routing_flow(
             cookie, priority, outport, dl_vlan=self.vlan_id)
             
@@ -1011,7 +1012,7 @@ class VlanRouter(object):
             raise CommandFailure(msg=msg)
         else:
             src_ip = address.default_gw
-            route = self.routing_tbl.add(destination, gateway)
+            route = self.routing_tbl.add(destination, gateway, qos)
             self._set_route_packetin(route, qos)
             self.send_arp_request(src_ip, dst_ip)
             return route.route_id
@@ -1029,10 +1030,11 @@ class VlanRouter(object):
         cookie = self._id_to_cookie(REST_ROUTEID, route.route_id)
         priority, log_msg = self._get_priority(PRIORITY_TYPE_ROUTE,
                                                route=route)
-
-        if qos == True:
-            priority = 2000
         
+        #print('Setting route_packetin flow . QoS = ' + str(qos))
+        #if qos == True:
+        #    priority = 2000
+        #
         self.ofctl.set_packetin_flow(cookie, priority,
                                      dl_type=ether.ETH_TYPE_IP,
                                      dl_vlan=self.vlan_id,
@@ -1247,6 +1249,9 @@ class VlanRouter(object):
                         print(path)
                         if len(path) == 1:
                             self._packetin_to_node(msg,header_list)
+                            #self._r_send_packet_out(self.ofctl.get_packetin_inport(msg))
+                            #self.ofctl.send_packet_out(in_port, output, msg.data)
+                            print('Edge router')
                         else:
                             next_hop_switch = path[1]
                             next_ip = self.get_matching_ip(switch_id, next_hop_switch)
@@ -1255,11 +1260,11 @@ class VlanRouter(object):
                                 self._set_routing_data(dest_ip, next_ip, True)
                             else:
                                 self._set_routing_data(dest_ip, next_ip)
-
+                    #self._packetin_to_node(msg,header_list)
                             in_port = self.ofctl.get_packetin_inport(msg)
-                            output = self.ofctl.dp.ofproto.OFPP_NORMAL
+                            output = G[path[0]][path[1]]['port_dict'][path[1]]
+                    #        #output = self.dp.ofproto.OFPP_IN_PORT
                             self.ofctl.send_packet_out(in_port, output, msg.data)
-
                     
                 #self._set_default_route_rule()
                 #self._packetin_to_node(msg, header_list)
@@ -1276,8 +1281,8 @@ class VlanRouter(object):
                 
     def _packetin_arp(self, msg, header_list):
         src_addr = self.address_data.get_data(ip=header_list[ARP].src_ip)
-        if src_addr is None:
-            return
+        #if src_addr is None:
+        #  return
 
         # case: Receive ARP from the gateway
         #  Update routing table.
@@ -1361,6 +1366,7 @@ class VlanRouter(object):
             print ('printing graph node list')
             print (list(G))
 	    self.logger.info('Graph Nodes are: ' + str(G.nodes(data=True)), extra=self.sw_id)
+            print('Edges...')
             self.logger.info('Graph edges are: ' + str(G.edges(data=True)), extra=self.sw_id)
 
         elif dst_ip not in rt_ports:
@@ -1617,20 +1623,24 @@ class VlanRouter(object):
                 self.routing_tbl[key].gateway_mac = src_mac
 
                 cookie = self._id_to_cookie(REST_ROUTEID, value.route_id)
-                priority, log_msg = self._get_priority(PRIORITY_TYPE_ROUTE,
-                                                       route=value)
+                #priority, log_msg = self._get_priority(PRIORITY_TYPE_ROUTE,
+               #                                        route=value)
 
-                if self.routing_tbl[key].qos_flag == True:
-                    priority = 5000
-                    self.ofctl.set_routing_flow(cookie, priority, out_port,
+                if str(QOS_PORT) in key:
+                    print('Updating QoS Flow')
+                    print('nw_dst ' + str(value.dst_ip))
+                    priority = 32
+                    self.ofctl.set_qos_routing_flow(cookie, priority, out_port,
                                             dl_vlan=self.vlan_id,
                                             src_mac=dst_mac,
                                             dst_mac=src_mac,
                                             nw_dst=value.dst_ip,
                                             dst_mask=value.netmask,
                                             dec_ttl=True)
-                else: 
-                    self.ofctl.set_routing_flow(cookie, priority, out_port,
+                #else: 
+                priority, log_msg = self._get_priority(PRIORITY_TYPE_ROUTE,
+                                                       route=value)
+                self.ofctl.set_routing_flow(cookie, priority, out_port,
                                             dl_vlan=self.vlan_id,
                                             src_mac=dst_mac,
                                             dst_mac=src_mac,
@@ -1800,7 +1810,12 @@ class RoutingTable(dict):
 
         routing_data = Route(self.route_id, dst_ip, netmask, gateway_ip, qos)
         ip_str = ip_addr_ntoa(dst_ip)
-        key = '%s/%d' % (ip_str, netmask)
+
+        if qos == True:
+            key = '%s%d-%s' % (ip_str, netmask, QOS_PORT)
+        else:
+            key = '%s%d' % (ip_str, netmask)
+
         self[key] = routing_data
 
         self.route_id += 1
@@ -1851,7 +1866,7 @@ class Route(object):
         self.netmask = netmask
         self.gateway_ip = gateway_ip
         self.gateway_mac = None
-        self.qos_flag = qos
+        self.dst_port = None
 
 
 class SuspendPacketList(list):
@@ -2035,6 +2050,13 @@ class OfCtl(object):
         # Send packet out
         self.send_packet_out(in_port, self.dp.ofproto.OFPP_IN_PORT,
                              pkt.data, data_str=str(pkt))
+
+        
+    def _r_send_packet_out(self, in_port, data, data_str=None):
+        #actions = [self.dp.ofproto_parser.OFPActionOutput(output, 0)]
+        actions = []
+        self.dp.send_packet_out(buffer_id=UINT32_MAX, in_port=in_port,
+                                actions=actions, data=data)
 
     def send_packet_out(self, in_port, output, data, data_str=None):
         actions = [self.dp.ofproto_parser.OFPActionOutput(output, 0)]
@@ -2246,8 +2268,9 @@ class OfCtl_after_v1_2(OfCtl):
         cmd = ofp.OFPFC_ADD
 
         # Match
-        match = ofp_parser.OFPMatch()
-        print (match)
+        #match = ofp_parser.OFPMatch(udp_dst=5004)
+        match = ofp_parser.OFPMatch(udp_dst=5004, eth_type=0x0800, ip_proto=17)
+        
         if dl_type:
             match.set_dl_type(dl_type)
         if dl_dst:
@@ -2260,7 +2283,7 @@ class OfCtl_after_v1_2(OfCtl):
         if nw_dst:
             match.set_ipv4_dst_masked(ipv4_text_to_int(nw_dst),
                                       mask_ntob(dst_mask))
-       # match.set_udp_dst(tp_dst)
+        # match.set_udp_dst(tp_dst)
 
         #match.set_ip_proto(17) #udp
 
@@ -2269,10 +2292,15 @@ class OfCtl_after_v1_2(OfCtl):
         inst = [ofp_parser.OFPInstructionActions(ofp.OFPIT_APPLY_ACTIONS,
                                                  actions)]
 
+        #match = ofp_parser.OFPMatch(udp_dst=5004, eth_type=0x0800, ip_proto=17)
+        print ('Match for QoS flow: ')
+        if dl_dst != 0 and dl_src != 0 and nw_dst != 0:
+            match = ofp_parser.OFPMatch(udp_dst=5004, eth_type=0x0800, ip_proto=17,
+                                        eth_src=dl_src, eth_dst=dl_dst, ipv4_dst=nw_dst)
 
         match = ofp_parser.OFPMatch(udp_dst=5004, eth_type=0x0800, ip_proto=17)
-        print ('Match for QoS flow: ')
         print(match)
+
         m = ofp_parser.OFPFlowMod(self.dp, cookie, 0, 0, cmd, idle_timeout,
                                   0, priority, UINT32_MAX, ofp.OFPP_ANY,
                                   ofp.OFPG_ANY, 0, match, inst)
@@ -2324,7 +2352,7 @@ class OfCtl_after_v1_2(OfCtl):
         if outport is not None:
             actions.append(ofp_parser.OFPActionOutput(outport, 65535))
 
-        self.set_QoS_flow(cookie, priority,tp_src=0, tp_dst=5004, dl_type=dl_type, dl_vlan=dl_vlan,
+        self.set_QoS_flow(cookie, priority,tp_src, tp_dst, dl_type=dl_type, dl_vlan=dl_vlan,
                       nw_src=nw_src, src_mask=src_mask,
                       nw_dst=nw_dst, dst_mask=dst_mask,
                       idle_timeout=idle_timeout, actions=actions)
