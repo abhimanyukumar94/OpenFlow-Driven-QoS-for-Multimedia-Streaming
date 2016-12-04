@@ -183,7 +183,7 @@ QOS_ENABLED = True
 QOS_PORT=5004
 G = nx.DiGraph()
 STATS_REQUEST_INTERVAL = 10
-
+PRINT_DEBUG = 1
 ev_map = {}
 
 def get_priority(priority_type, vid=0, route=None):
@@ -353,7 +353,7 @@ class RestRouterAPI(app_manager.RyuApp):
             #self.print_all_shortest_paths()
             hub.sleep(STATS_REQUEST_INTERVAL)
             # get all the datapaths
-            print ('Printing routers*******************************************************')
+            #print ('Printing routers*******************************************************')
             #print (len(RouterController.get_routers()))
             #for router in RouterController.get_routers():
             #    print(router)
@@ -389,11 +389,13 @@ class RestRouterAPI(app_manager.RyuApp):
 
         #lock.acquire()
 #       print(list(ev_map))
-	print('datapath         port     '
-                         'total-bytes	Link Utilization(Mbps)	Weight')
-                         
-        print('---------------- '
-                         '--------	---------	---------	-----------')
+
+        if PRINT_DEBUG:
+            print('datapath         port     '
+                             'total-bytes	Link Utilization(Mbps)	Weight')
+                             
+            print('---------------- '
+                             '--------	---------	---------	-----------')
 
 	body.sort(key=attrgetter('port_no'))
         body1.sort(key=attrgetter('port_no'))
@@ -411,12 +413,13 @@ class RestRouterAPI(app_manager.RyuApp):
 		BW = float(TB*8/1000000) 
                 BW = BW//STATS_REQUEST_INTERVAL
           	Wgt = float(BW * 10)
-            	print ("%016x %8x %8d     %8.5f           %8.9f" % (
-                             	ev.msg.datapath.id, stat.port_no
-                             	,bytes0, BW, Wgt))
-
                 sw_id = dpid_lib.dpid_to_str(ev.msg.datapath.id)
-                print ('switch id = %s ' % sw_id)
+                if PRINT_DEBUG:
+                    print ("%016x %8x %8d     %8.5f           %8.9f" % (
+                                    ev.msg.datapath.id, stat.port_no
+                                    ,bytes0, BW, Wgt))
+
+                    print ('switch id = %s ' % sw_id)
                 port = stat.port_no
 
                 #find if there is an edge with start point at sw_id
@@ -424,13 +427,15 @@ class RestRouterAPI(app_manager.RyuApp):
                 #print('printing edges #######################################')
                 for u, v, d in G.edges(data=True):
                     #print ('%s : %s { %s }' % (u, v, d))
-                    if v == sw_id:
+                    if u == sw_id:
                         #print (u + ' is in edges !!!!!===========================!!!!')
                         for k,val in d['port_dict'].items():
                             #print ('switch_id: ' + str(u) + ' | port: ' + str(v))
                             if stat.port_no ==  val:
                                 new_weight = max(1, Wgt)
-                                print ('updating weight of edge ' + u + '->' + v + 'with ' + str(new_weight))
+                                if new_weight != G[u][v]['w']:
+                                    print ('updating weight of edge ' + u + '-> ' + v + 'with ' + str(new_weight))
+                                    self.print_all_shortest_paths()
                                 G[u][v]['w'] = new_weight
                 
                 #print ('Port Number -> %s | Total bytes sent: %s | Bandwidth %s | Edge Weight [%s]', stat.port_no, TB, BW, Wgt)
@@ -438,8 +443,6 @@ class RestRouterAPI(app_manager.RyuApp):
 	#overwriting the previous event 	
         #lock.release()
 	ev_map[ev.msg.datapath] = ev
-
-
 
 # REST command template
 def rest_command(func):
@@ -1379,13 +1382,18 @@ class VlanRouter(object):
                         break
         
             # Ronald Find the shortest path between these two switches.
-            path = self.get_shortest_path(switch_id, dst_sw_id)
-            self.logger.info('Path is %s ', path, extra=self.sw_id)        
+            if dstport:
+                if dstport == QOS_PORT:
+                    path = self.get_shortest_path(switch_id, dst_sw_id, qos=True)
+                else:
+                    path = self.get_shortest_path(switch_id, dst_sw_id)
+
 
             # Ronald Now push the shortest path.
             if path is None:
                 self.logger.info('The destination switch is unreachable', extra=self.sw_id)
             elif len(path) > 1:
+                self.logger.info('Path is %s ', path, extra=self.sw_id)        
                 self.logger.info('Setting the next hop', extra=self.sw_id)
                 nxt_hop_switch = path[1]
                 # Ronald needs the next gateway ip to set in the routing table
